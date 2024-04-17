@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The retro flight simulator in 3D</title>
+<style>
+  /* Styling for the canvas and body */
+  body {
+    margin: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+    position: relative; /* Ensure the body is positioned relative */
+  }
+  canvas {
+    display: block;
+  }
+  #stats {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    color: white;
+    font-size: 12px;
+  }
+  .warning {
+    position: absolute;
+    top: 20px; /* Adjust as needed */
+    left: 50%; /* Center horizontally */
+    transform: translateX(-50%);
+    color: white;
+    font-size: 24px;
+    text-align: center;
+    z-index: 999; /* Ensure the warning is displayed above the canvas */
+    transition: opacity 0.5s ease; /* Smooth transition for opacity */
+  }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<div id="stats"></div>
+<div id="vws" class="warning"></div>
+<script>
+  // Get the canvas element and its 2D rendering context
+  const canvas = document.getElementById('gameCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // Set canvas size to match window size
+  function setCanvasSize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  // Call setCanvasSize initially
+  setCanvasSize();
+
+  // Update canvas size when window is resized
+  window.addEventListener('resize', setCanvasSize);
+
+  // Constants for the game
+  const SKY_HEIGHT_PERCENTAGE = 0.7; // Percentage of canvas height reserved for sky
+  const GROUND_HEIGHT_PERCENTAGE = 0.3; // Percentage of canvas height reserved for ground
+  const PLANE_SIZE = 30; // Size of the plane
+  const PLANE_SPEED = 4; // Initial speed of the plane
+  const MAX_TILT_ANGLE = Math.PI / 6; // Maximum tilt angle of the plane
+  const TILT_SPEED = 0.01; // Speed at which the plane tilts
+  const DECELERATION_FACTOR = 0.01; // Factor at which the plane decelerates
+  const HORIZON_Y = canvas.height * SKY_HEIGHT_PERCENTAGE; // Y-coordinate of the horizon
+  const GROUND_Y = canvas.height * (1 - GROUND_HEIGHT_PERCENTAGE); // Y-coordinate of the ground
+  const NUM_FIBONACCI_LINES = 20; // Number of vertical lines on the screen
+  const LINE_SPEED = 2; // Speed at which vertical lines move
+  const GROUND_COLOR_TOP = '#004d00'; // Top color of the ground gradient
+  const GROUND_COLOR_BOTTOM = '#00b300'; // Bottom color of the ground gradient
+  const INVERSE_COLOR = '#00b300'; // Color for vertical lines
+  const TREE_COLORS = ['#228B22', '#2E8B57', '#32CD32']; // Shades of green for trees
+  const TREE_FREQUENCY = 2; // Frequency of trees
+  const MIN_TREE_SIZE = 2; // Minimum size of trees
+  const MAX_TREE_SIZE = 30; // Maximum size of trees
+  const TREE_GROWTH_SPEED = 1.1; // Speed at which trees grow
+  let tiltAngle = 0; // Current tilt angle of the plane
+  let turningLeft = false; // Flag indicating whether the plane is turning left
+  let turningRight = false; // Flag indicating whether the plane is turning right
+  let warningOpacity = 1; // Initial opacity of the warning message
+  let planeHasClimbed = false; // Flag indicating if the plane has climbed by 10% of the screen area
+  let showTerrainWarning = false; // Flag to track if "Terrain!" warning should be shown
+  let lastTurnDirection = null; // Track the last turn direction
+  let vwsTimeout; // Timeout for hiding VWS messages
+  let bankAngleWarningVisible = false; // Flag to track if the "Bank angle!" warning is visible
+
+  // Define the plane object
+  const plane = {
+    x: canvas.width / 2 - PLANE_SIZE / 2, // Initial x-coordinate of the plane
+    y: (canvas.height * (1 - SKY_HEIGHT_PERCENTAGE)) / 2 - PLANE_SIZE / 2, // Initial y-coordinate of the plane
+    width: PLANE_SIZE, // Width of the plane
+    height: PLANE_SIZE, // Height of the plane
+    speed: PLANE_SPEED, // Speed of the plane
+    tilt: 0, // Current tilt angle of the plane
+    rotationSpeed: Math.PI / 180, // Speed at which the plane rotates
+    sidewaysSpeed: 0, // Speed of the plane in sideways direction
+    verticalSpeed: 0 // Speed of the plane in vertical direction
+  };
+
+  // Array to store vertical lines on the screen
+  let verticalLines = [];
+  let trees = [];
+
+  // Function to initialize vertical lines
+  function initVerticalLines() {
+    let y = HORIZON_Y; // Initial y-coordinate for vertical lines
+    let lineGap = 2; // Initial gap between lines
+    let fibonacci = [0, 1]; // Fibonacci sequence to determine line gaps
+    for (let i = 0; i < NUM_FIBONACCI_LINES; i++) {
+      verticalLines.push({ y, gap: lineGap }); // Add line object to array
+      const nextFibonacci = fibonacci[fibonacci.length - 1] + fibonacci[fibonacci.length - 2]; // Calculate next Fibonacci number
+      fibonacci.push(nextFibonacci); // Add next Fibonacci number to sequence
+      lineGap = nextFibonacci; // Update line gap
+      y += lineGap; // Update y-coordinate for next line
+    }
+  }
+
+  // Function to initialize trees
+  function initTrees() {
+    setInterval(() => {
+      const tree = {
+        x: Math.random() * canvas.width, // Random x-coordinate
+        y: HORIZON_Y - MIN_TREE_SIZE, // Y-coordinate just above the horizon
+        size: MIN_TREE_SIZE, // Initial size of tree
+        color: TREE_COLORS[Math.floor(Math.random() * TREE_COLORS.length)] // Random color for tree
+      };
+      trees.push(tree);
+    }, TREE_FREQUENCY);
+  }
+
+  // Function to update vertical lines position
+  function updateVerticalLines() {
+    verticalLines.forEach(line => {
+      line.y += LINE_SPEED; // Move line downwards
+      if (line.y > canvas.height) { // If line goes below canvas, reset its position
+        line.y = HORIZON_Y;
+      }
+    });
+  }
+
+  // Function to update trees position and size
+  function updateTrees() {
+    trees.forEach(tree => {
+      tree.y += LINE_SPEED; // Move tree downwards
+      if (tree.size < MAX_TREE_SIZE) {
+        tree.size += TREE_GROWTH_SPEED; // Grow tree
+      }
+      if (tree.y > canvas.height) { // If tree goes below canvas, remove it
+        trees.splice(trees.indexOf(tree), 1);
+      }
+    });
+  }
+
+  // Function to draw vertical lines on the canvas
+  function drawVerticalLines() {
+    verticalLines.forEach(line => {
+      ctx.strokeStyle = INVERSE_COLOR; // Set stroke color for lines
+      ctx.beginPath(); // Begin path for line
+      ctx.moveTo(0, line.y); // Move to starting point of line
+      ctx.lineTo(canvas.width, line.y); // Draw line across canvas width
+      ctx.stroke(); // Stroke the line
+    });
+  }
+
+  // Function to draw trees on the canvas
+  function drawTrees() {
+    trees.forEach(tree => {
+      ctx.fillStyle = tree.color; // Set fill color for tree
+      ctx.fillRect(tree.x - tree.size / 2, tree.y - tree.size, tree.size, tree.size); // Draw tree trunk
+      ctx.beginPath();
+      ctx.moveTo(tree.x - tree.size * 1.5, tree.y - tree.size); // Start from top left of trunk
+      ctx.lineTo(tree.x + tree.size * 1.5, tree.y - tree.size); // Go to top right of trunk
+      ctx.lineTo(tree.x, tree.y - tree.size * 2); // Go to top of tree
+      ctx.closePath();
+      ctx.fill(); // Fill the tree
+    });
+  }
+
+  // Function to draw the plane on the canvas
+  function drawPlane() {
+    ctx.save(); // Save current canvas state
+    ctx.translate(plane.x + plane.width / 2, plane.y + plane.height / 2); // Translate to plane position
+    ctx.rotate(plane.tilt); // Rotate according to plane's tilt angle
+    ctx.fillStyle = 'white'; // Set fill color for plane body
+    ctx.fillRect(-plane.width / 2, -plane.height / 2, plane.width, plane.height); // Draw plane body
+    ctx.fillStyle = '#A9A9A9'; // Set fill color for plane details
+    ctx.fillRect(-plane.width / 2 - 20, -plane.height / 2 + 10, 20, 10); // Draw left wing
+    ctx.fillRect(plane.width / 2, -plane.height / 2 + 10, 20, 10); // Draw right wing
+    ctx.fillStyle = 'grey'; // Set fill color for plane tail
+    ctx.fillRect(-plane.width / 2 + 5, -plane.height / 2, plane.width - 10, plane.height / 2); // Draw tail
+    ctx.fillStyle = '#A9A9A9'; // Set fill color for plane details
+    ctx.fillRect(-5, -plane.height / 2 - 10, 10, 20); // Draw cockpit
+    ctx.restore(); // Restore previous canvas state
+  }
+
+  // Function to update game state
+  function update() {
+    let levelFlight = false; // Flag to track if the plane is at level flight
+
+    // Update plane tilt based on user input
+    if (turningLeft && plane.tilt > -MAX_TILT_ANGLE) {
+      plane.tilt -= TILT_SPEED;
+      if (plane.tilt < -MAX_TILT_ANGLE && lastTurnDirection !== 'left') {
+        showWarning("Bank angle!");
+        lastTurnDirection = 'left';
+      }
+    }
+    if (turningRight && plane.tilt < MAX_TILT_ANGLE) {
+      plane.tilt += TILT_SPEED;
+      if (plane.tilt > MAX_TILT_ANGLE && lastTurnDirection !== 'right') {
+        showWarning("Bank angle!");
+        lastTurnDirection = 'right';
+      }
+    }
+
+    // Decelerate plane tilt if no input is received
+    if (!turningLeft && !turningRight) {
+      if (plane.tilt > 0) {
+        plane.tilt = Math.max(0, plane.tilt - DECELERATION_FACTOR);
+      } else if (plane.tilt < 0) {
+        plane.tilt = Math.min(0, plane.tilt + DECELERATION_FACTOR);
+      }
+      lastTurnDirection = null; // Reset last turn direction
+      if (bankAngleWarningVisible) { // Hide the "Bank angle!" warning if the plane returns to safe tilt angle
+        hideWarning();
+        bankAngleWarningVisible = false;
+      }
+    }
+
+    // Update plane vertical speed based on user input
+    if (keys.ArrowUp && plane.y > 0) {
+      plane.verticalSpeed -= plane.speed * DECELERATION_FACTOR;
+      if (plane.verticalSpeed < 0 && plane.verticalSpeed > -0.2) { // If plane starts climbing
+        planeHasClimbed = true;
+      }
+      if (planeHasClimbed && plane.y <= HORIZON_Y * 0.75) { // If the plane has gone up by 25%
+        showWarning("Stall!");
+      }
+    } else if (keys.ArrowDown && plane.y < canvas.height - plane.height) {
+      plane.verticalSpeed += plane.speed * DECELERATION_FACTOR;
+      if (plane.y >= HORIZON_Y * 0.5 && plane.y <= HORIZON_Y + 10) { // Near the horizon
+        showWarning("Terrain!");
+      }
+    } else {
+      plane.verticalSpeed *= 0.95; // Apply vertical speed decay
+      if (plane.y >= GROUND_Y && plane.y <= HORIZON_Y) { // Plane is near level flight
+        levelFlight = true;
+        hideWarning(); // Hide any warning messages
+      }
+    }
+
+    // Update plane position based on vertical speed
+    plane.y += plane.verticalSpeed;
+
+    // Update plane sideways speed based on tilt angle
+    plane.sidewaysSpeed = plane.speed * Math.sin(plane.tilt);
+    plane.x += plane.sidewaysSpeed;
+
+    // Handle user input for turning
+    if (keys.ArrowLeft) {
+      turningLeft = true;
+      turningRight = false;
+    } else if (keys.ArrowRight) {
+      turningRight = true;
+      turningLeft = false;
+    } else {
+      turningLeft = false;
+      turningRight = false;
+    }
+
+    // Update vertical lines position
+    updateVerticalLines();
+
+    // Update trees position and size
+    updateTrees();
+
+    // Clear the canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw sky gradient
+    const skyGradient = ctx.createLinearGradient(0, 0, 0, HORIZON_Y);
+    skyGradient.addColorStop(0, '#00008B');
+    skyGradient.addColorStop(1, '#87CEEB');
+    ctx.fillStyle = skyGradient;
+    ctx.fillRect(0, 0, canvas.width, HORIZON_Y);
+
+    // Draw ground gradient
+    const groundGradient = ctx.createLinearGradient(0, HORIZON_Y, 0, canvas.height);
+    groundGradient.addColorStop(0, GROUND_COLOR_TOP);
+    groundGradient.addColorStop(1, GROUND_COLOR_BOTTOM);
+    ctx.fillStyle = groundGradient;
+    ctx.fillRect(0, HORIZON_Y, canvas.width, canvas.height - HORIZON_Y);
+
+    // Draw the plane
+    drawPlane();
+    
+    // Draw vertical lines
+    drawVerticalLines();
+
+    // Draw trees
+    drawTrees();
+
+    // Update stats
+    updateStats();
+
+    // Request next animation frame
+    requestAnimationFrame(update);
+  }
+
+  // Function to show warning messages
+  function showWarning(message) {
+    clearTimeout(vwsTimeout); // Clear any existing timeout
+    const warning = document.getElementById('vws');
+    warning.textContent = message; // Set warning message
+    warning.style.opacity = 1; // Show the warning message
+    if (message === "Bank angle!") {
+      bankAngleWarningVisible = true;
+    }
+  }
+
+  // Function to hide warning messages
+  function hideWarning() {
+    vwsTimeout = setTimeout(() => { // Set timeout to hide the warning after 2ms
+      const warning = document.getElementById('vws');
+      warning.style.opacity = 0; // Hide the warning message
+    }, 2000);
+  }
+
+  // Object to store keyboard input
+  const keys = {};
+  window.addEventListener('keydown', e => {
+    keys[e.key] = true; // Set key to true when pressed
+  });
+  window.addEventListener('keyup', e => {
+    keys[e.key] = false; // Set key to false when released
+    if (e.key === 'ArrowDown' && !keys.ArrowUp && !keys.ArrowDown && !keys.ArrowLeft && !keys.ArrowRight) {
+      hideWarning(); // Hide the warning message when the arrow key is released and no other arrow keys are pressed
+    }
+  });
+
+  // Function to update stats
+  function updateStats() {
+    const stats = document.getElementById('stats');
+    stats.innerHTML = `
+      Browser: ${navigator.userAgent}<br>
+      Page Size: ${Math.round(document.documentElement.innerHTML.length / 1024)} kB
+    `;
+  }
+
+  // Initialize vertical lines and trees
+  initVerticalLines();
+  initTrees();
+
+  // Start the game loop
+  let lastTime = performance.now();
+  let deltaTime = 0;
+  update();
+
+
+</script>
+</body>
+</html>
